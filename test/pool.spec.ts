@@ -5,7 +5,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { Context } from '@sabl/context';
-import { AsyncFactory, createPool, limit, wait } from '$';
+import { AsyncFactory, createPool, limit, promise, wait } from '$';
 import { later } from '$test/lib/later';
 
 class Counter {
@@ -1266,7 +1266,12 @@ describe('maxFailureCount', () => {
       }
     );
 
+    const waitHandle = {
+      nextError: promise<void>(),
+    };
+
     badPool.on('error', (action, err) => {
+      waitHandle.nextError.resolve();
       errs.push(`Pool error for ${action} action: ${err}`);
     });
 
@@ -1274,7 +1279,8 @@ describe('maxFailureCount', () => {
 
     // Let a bunch of errors happen
     while (badPool.stats().createFailureCount < 20) {
-      await wait(10);
+      await waitHandle.nextError;
+      waitHandle.nextError = promise<void>();
     }
 
     badPool.close();
@@ -1300,7 +1306,12 @@ describe('maxFailureCount', () => {
       }
     );
 
+    const waitHandle = {
+      nextError: promise<void>(),
+    };
+
     badPool.on('error', (action, err) => {
+      waitHandle.nextError.resolve();
       errs.push(`Pool error for ${action} action: ${err}`);
     });
 
@@ -1309,7 +1320,8 @@ describe('maxFailureCount', () => {
 
     // Let 5 errors happen
     while (badPool.stats().createFailureCount < 5) {
-      await wait(10);
+      await waitHandle.nextError;
+      waitHandle.nextError = promise<void>();
     }
 
     // Now readjust to allow unlimited
@@ -1317,7 +1329,8 @@ describe('maxFailureCount', () => {
 
     // Let more errors happen
     while (badPool.stats().createFailureCount < 7) {
-      await wait(10);
+      await waitHandle.nextError;
+      waitHandle.nextError = promise<void>();
     }
 
     badPool.close();
@@ -1343,7 +1356,12 @@ describe('maxFailureCount', () => {
       }
     );
 
+    const waitHandle = {
+      nextError: promise<void>(),
+    };
+
     badPool.on('error', (action, err) => {
+      waitHandle.nextError.resolve();
       errs.push(`Pool error for ${action} action: ${err}`);
     });
 
@@ -1351,7 +1369,8 @@ describe('maxFailureCount', () => {
 
     // Let 5 errors happen
     while (badPool.stats().createFailureCount < 5) {
-      await wait(10);
+      await waitHandle.nextError;
+      waitHandle.nextError = promise<void>();
     }
     badPool.setOptions({ maxCreateFailures: 4 });
 
