@@ -1305,6 +1305,7 @@ describe('maxFailureCount', () => {
     });
 
     const req = badPool.get();
+    const test = expect(req).rejects.toThrow('Pool is closing');
 
     // Let 5 errors happen
     while (badPool.stats().createFailureCount < 5) {
@@ -1315,15 +1316,15 @@ describe('maxFailureCount', () => {
     badPool.setOptions({ maxCreateFailures: -1 });
 
     // Let more errors happen
-    while (badPool.stats().createFailureCount < 10) {
+    while (badPool.stats().createFailureCount < 7) {
       await wait(10);
     }
 
     badPool.close();
 
-    await expect(req).rejects.toThrow('Pool is closing');
+    await test;
 
-    expect(errs.length).toBeGreaterThan(9);
+    expect(errs.length).toBeGreaterThan(6);
   });
 
   it('immediately kills pool if new value requires it', async () => {
