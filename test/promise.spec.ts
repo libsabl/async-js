@@ -2,8 +2,9 @@
 // Use of this source code is governed by a MIT
 // license that can be found in the LICENSE file.
 
-import { later, promise } from '$';
 import { CanceledError, Canceler, Context } from '@sabl/context';
+import { promise } from '$';
+import { later } from '$test/lib/later';
 
 describe('promise', () => {
   it('resolves on resolve', async () => {

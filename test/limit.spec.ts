@@ -2,8 +2,9 @@
 // Use of this source code is governed by a MIT
 // license that can be found in the LICENSE file.
 
-import { later, limit } from '$';
 import { Context, IContext } from '@sabl/context';
+import { limit } from '$';
+import { later } from '$test/lib/later';
 
 describe('limit', () => {
   describe('resolve', () => {
