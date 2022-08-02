@@ -4,9 +4,9 @@
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-import { later, limit, wait } from '$';
-import { AsyncFactory, createPool } from '$/pool';
 import { Context } from '@sabl/context';
+import { AsyncFactory, createPool, limit, promise, wait } from '$';
+import { later } from '$test/lib/later';
 
 class Counter {
   destroyed = false;
@@ -263,6 +263,7 @@ describe('release', () => {
     const pool = createPool(factory);
     (<any>factory).reset = function (item: Counter) {
       (<any>item).wasReset = true;
+      return true;
     };
 
     const item = await pool.get();
@@ -273,6 +274,24 @@ describe('release', () => {
 
     // Item WAS added to pool
     expect(pool.stats().idleCount).toBe(1);
+  });
+
+  it('destroys if reset returns false', async () => {
+    const factory = new CounterFactory();
+    const pool = createPool(factory);
+    (<any>factory).reset = function (item: Counter) {
+      (<any>item).wasReset = true;
+      return false;
+    };
+
+    const item = await pool.get();
+    pool.release(item);
+
+    // Reset method was invoked
+    expect((<any>item).wasReset).toBe(true);
+
+    // But Item WAS NOT added to pool
+    expect(pool.stats().idleCount).toBe(0);
   });
 
   it('destroys if reset failed', async () => {
@@ -1146,6 +1165,221 @@ describe('maxIdleCount', () => {
   });
 });
 
+describe('maxFailureCount', () => {
+  it('ignores set to same value', async () => {
+    // Ensures coverage of short-circuit in EmittingPoolOptions
+    const factory = new CounterFactory();
+    const pool = createPool(factory, { maxCreateFailures: 2 });
+    pool.setOptions({ maxCreateFailures: 2 });
+    await expect(pool.close()).resolves.toBe(undefined);
+  });
+
+  it('default kills pool on 11th consecutive create failure', async () => {
+    const errs: string[] = [];
+    const badPool = createPool<object>({
+      create() {
+        throw new Error('Error creating');
+      },
+      destroy() {
+        return Promise.resolve();
+      },
+    });
+
+    badPool.on('error', (action, err) => {
+      errs.push(`Pool error for ${action} action: ${err}`);
+    });
+
+    const req = badPool.get();
+
+    await expect(req).rejects.toThrow('Pool is closing');
+
+    expect(errs.length).toBe(11);
+  });
+
+  it('kills pool after specified number consecutive create failures', async () => {
+    const errs: string[] = [];
+    const badPool = createPool<object>(
+      {
+        create() {
+          throw new Error('Error creating');
+        },
+        destroy() {
+          return Promise.resolve();
+        },
+      },
+      {
+        maxCreateFailures: 4,
+      }
+    );
+
+    badPool.on('error', (action, err) => {
+      errs.push(`Pool error for ${action} action: ${err}`);
+    });
+
+    const req = badPool.get();
+
+    await expect(req).rejects.toThrow('Pool is closing');
+
+    expect(errs.length).toBe(5);
+  });
+
+  it('kills pool upon create failure (max == 0)', async () => {
+    const errs: string[] = [];
+    const badPool = createPool<object>(
+      {
+        create() {
+          throw new Error('Error creating');
+        },
+        destroy() {
+          return Promise.resolve();
+        },
+      },
+      {
+        maxCreateFailures: 0,
+      }
+    );
+
+    badPool.on('error', (action, err) => {
+      errs.push(`Pool error for ${action} action: ${err}`);
+    });
+
+    const req = badPool.get();
+
+    await expect(req).rejects.toThrow('Pool is closing');
+
+    expect(errs.length).toBe(1);
+  });
+
+  it('allows unlimited failures if negative', async () => {
+    const errs: string[] = [];
+    const badPool = createPool<object>(
+      {
+        create() {
+          throw new Error('Error creating');
+        },
+        destroy() {
+          return Promise.resolve();
+        },
+      },
+      {
+        maxCreateFailures: -1,
+      }
+    );
+
+    const waitHandle = {
+      nextError: promise<void>(),
+    };
+
+    badPool.on('error', (action, err) => {
+      waitHandle.nextError.resolve();
+      errs.push(`Pool error for ${action} action: ${err}`);
+    });
+
+    const req = badPool.get();
+
+    // Let a bunch of errors happen
+    while (badPool.stats().createFailureCount < 20) {
+      await waitHandle.nextError;
+      waitHandle.nextError = promise<void>();
+    }
+
+    badPool.close();
+
+    await expect(req).rejects.toThrow('Pool is closing');
+
+    expect(errs.length).toBeGreaterThan(19);
+  });
+
+  it('allows unlimited failures if changed to negative', async () => {
+    const errs: string[] = [];
+    const badPool = createPool<object>(
+      {
+        create() {
+          throw new Error('Error creating');
+        },
+        destroy() {
+          return Promise.resolve();
+        },
+      },
+      {
+        maxCreateFailures: 5,
+      }
+    );
+
+    const waitHandle = {
+      nextError: promise<void>(),
+    };
+
+    badPool.on('error', (action, err) => {
+      waitHandle.nextError.resolve();
+      errs.push(`Pool error for ${action} action: ${err}`);
+    });
+
+    const req = badPool.get();
+    const test = expect(req).rejects.toThrow('Pool is closing');
+
+    // Let 5 errors happen
+    while (badPool.stats().createFailureCount < 5) {
+      await waitHandle.nextError;
+      waitHandle.nextError = promise<void>();
+    }
+
+    // Now readjust to allow unlimited
+    badPool.setOptions({ maxCreateFailures: -1 });
+
+    // Let more errors happen
+    while (badPool.stats().createFailureCount < 7) {
+      await waitHandle.nextError;
+      waitHandle.nextError = promise<void>();
+    }
+
+    badPool.close();
+
+    await test;
+
+    expect(errs.length).toBeGreaterThan(6);
+  });
+
+  it('immediately kills pool if new value requires it', async () => {
+    const errs: string[] = [];
+    const badPool = createPool<object>(
+      {
+        create() {
+          throw new Error('Error creating');
+        },
+        destroy() {
+          return Promise.resolve();
+        },
+      },
+      {
+        maxCreateFailures: -1,
+      }
+    );
+
+    const waitHandle = {
+      nextError: promise<void>(),
+    };
+
+    badPool.on('error', (action, err) => {
+      waitHandle.nextError.resolve();
+      errs.push(`Pool error for ${action} action: ${err}`);
+    });
+
+    const req = badPool.get();
+
+    // Let 5 errors happen
+    while (badPool.stats().createFailureCount < 5) {
+      await waitHandle.nextError;
+      waitHandle.nextError = promise<void>();
+    }
+    badPool.setOptions({ maxCreateFailures: 4 });
+
+    await expect(req).rejects.toThrow('Pool is closing');
+
+    expect(errs.length).toBeGreaterThan(4);
+  });
+});
+
 describe('errors', () => {
   it('captures and emits create errors', async () => {
     const errs: string[] = [];
@@ -1235,27 +1469,5 @@ describe('errors', () => {
     expect(errs[0]).toMatch(
       'Pool error for reset action: Error: I refuse to reset item [object Object]'
     );
-  });
-
-  it('kills pool on 10 consecutive create failures', async () => {
-    const errs: string[] = [];
-    const badPool = createPool<object>({
-      create() {
-        throw new Error('Error creating');
-      },
-      destroy() {
-        return Promise.resolve();
-      },
-    });
-
-    badPool.on('error', (action, err) => {
-      errs.push(`Pool error for ${action} action: ${err}`);
-    });
-
-    const req = badPool.get();
-
-    await expect(req).rejects.toThrow('Pool is closing');
-
-    expect(errs.length).toBe(10);
   });
 });

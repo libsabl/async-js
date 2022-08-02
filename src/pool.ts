@@ -14,7 +14,7 @@ export interface AsyncFactory<T extends object> {
   destroy(item: T): Promise<void>;
 
   /** Optional method to reset an item before reuse */
-  reset?(item: T): void;
+  reset?(item: T): boolean;
 }
 
 /** Options for managing the count and lifetime of pool items */
@@ -39,6 +39,9 @@ export interface PoolOptions {
 
   /** Whether items can be created in parallel */
   parallelCreate?: boolean;
+
+  /** The maximum count of allowed consecutive failures to create a new item */
+  maxCreateFailures?: number;
 }
 
 /** Current statistics about an {@link AsyncPool} */
@@ -57,6 +60,9 @@ export interface PoolStats {
   /** The maximum count of items kept idle */
   readonly maxIdleCount: number;
 
+  /** The maximum count of allowed consecutive failures to create a new item */
+  readonly maxCreateFailures: number;
+
   // Item counts
 
   /** Current number of items, both in use and idle */
@@ -72,6 +78,9 @@ export interface PoolStats {
 
   /** Current number of requests currently waiting for an item */
   readonly waitCount: number;
+
+  /** Current number of consecutive failures to create a new item */
+  readonly createFailureCount: number;
 
   /**
    * Total time in milliseconds that all requests have waited
@@ -155,8 +164,6 @@ export class PoolError extends Error {
   }
 }
 
-export const MAX_CREATE_FAILURES = 10;
-
 /**
  * Internal options bundle that raises events
  * when any of its properties are changed. Allows
@@ -167,6 +174,7 @@ class EmittingPoolOptions extends EventEmitter {
   #maxIdleTime: number;
   #maxOpenCount: number;
   #maxIdleCount: number;
+  #maxCreateFailures: number;
 
   parallelCreate: boolean;
 
@@ -178,6 +186,7 @@ class EmittingPoolOptions extends EventEmitter {
         maxIdleTime: -1,
         maxLifetime: -1,
         maxOpenCount: -1,
+        maxCreateFailures: 10,
       },
       ...opts.filter((n) => n != null)
     );
@@ -185,6 +194,7 @@ class EmittingPoolOptions extends EventEmitter {
     this.#maxIdleTime = resolved.maxIdleTime;
     this.#maxOpenCount = resolved.maxOpenCount;
     this.#maxIdleCount = resolved.maxIdleCount;
+    this.#maxCreateFailures = resolved.maxCreateFailures;
     this.parallelCreate = resolved.parallelCreate !== false;
   }
 
@@ -230,6 +240,17 @@ class EmittingPoolOptions extends EventEmitter {
 
     this.#maxIdleCount = value;
     this.emit('maxIdleCount', value);
+  }
+
+  get maxCreateFailures(): number {
+    return this.#maxCreateFailures;
+  }
+
+  set maxCreateFailures(value: number) {
+    if (value == this.#maxCreateFailures) return;
+
+    this.#maxCreateFailures = value;
+    this.emit('maxCreateFailures', value);
   }
 }
 
@@ -302,7 +323,7 @@ class Pool<T extends object>
   #creating = 0;
 
   // Number of consecutive times
-  #createFailures = 0;
+  #createFailureCount = 0;
 
   constructor(factory: AsyncFactory<T>, options?: PoolOptions) {
     super();
@@ -312,6 +333,7 @@ class Pool<T extends object>
     opts.on('maxIdleTime', this.#onMaxIdleTime.bind(this));
     opts.on('maxOpenCount', this.#onMaxOpenCount.bind(this));
     opts.on('maxIdleCount', this.#onMaxIdleCount.bind(this));
+    opts.on('maxCreateFailures', this.#onMaxCreateFailures.bind(this));
   }
 
   stats(): PoolStats {
@@ -320,11 +342,13 @@ class Pool<T extends object>
       maxLifetime: this.#options.maxLifetime,
       maxIdleTime: this.#options.maxIdleTime,
       maxIdleCount: this.#options.maxIdleCount,
+      maxCreateFailures: this.#options.maxCreateFailures,
       count: this.#pool.length + this.#active.length,
       inUseCount: this.#active.length,
       idleCount: this.#pool.length,
 
       waitCount: this.#queue.length,
+      createFailureCount: this.#createFailureCount,
       waitDuration: this.#waitDuration,
       maxIdleClosed: this.#maxIdleClosed,
       maxIdleTimeClosed: this.#maxIdleTimeClosed,
@@ -414,7 +438,10 @@ class Pool<T extends object>
 
     if (this.#factory.reset != null) {
       try {
-        this.#factory.reset(el.item);
+        if (this.#factory.reset(el.item) !== true) {
+          this.#destroy(el.item);
+          return;
+        }
       } catch (e) {
         // Failed to reset. Emit error and destroy the item
         this.#error('reset', e);
@@ -507,11 +534,12 @@ class Pool<T extends object>
     let item: T;
     try {
       item = await this.#factory.create();
-      this.#createFailures = 0;
+      this.#createFailureCount = 0;
     } catch (e) {
       this.#error('create', e);
-      this.#createFailures++;
-      if (this.#createFailures >= MAX_CREATE_FAILURES) {
+      this.#createFailureCount++;
+      const maxFailures = this.#options.maxCreateFailures;
+      if (maxFailures >= 0 && this.#createFailureCount > maxFailures) {
         this.close();
       }
       return;
@@ -869,6 +897,18 @@ class Pool<T extends object>
       const el = this.#pool.shift()!;
       this.#maxIdleClosed++;
       this.#destroy(el.item); // Do not await
+    }
+  }
+
+  #onMaxCreateFailures(value: number) {
+    // Unlimited
+    if (value < 0) {
+      return;
+    }
+
+    if (value < this.#createFailureCount) {
+      // Automatically close
+      this.close();
     }
   }
 }
