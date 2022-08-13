@@ -39,11 +39,8 @@ describe('stream', () => {
 
   it('iterates a custom iterable', async () => {
     const iterable = {
-      [Symbol.iterator]: function* () {
-        yield 2;
-        yield 4;
-        yield 6;
-        yield 8;
+      *[Symbol.iterator]() {
+        for (let i = 2; i <= 8; i += 2) yield i;
       },
     };
     let i = 0;

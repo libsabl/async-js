@@ -149,8 +149,8 @@ async function* asyncSequence(n, delay): AsyncIterable<number> {
 }
 
 // We can await the full result set:
-const result = await collect(asyncSequence(10, 50));
-console.log(result) // [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+const result = await collect(asyncSequence(6, 500));
+console.log(result) // [1, 2, 3, 4, 5, 6]
 ```
 
 ## `stream`
@@ -163,14 +163,25 @@ stream<T>(items: Iterable<T>): AsyncIterable<T>
 The `stream` method takes a param array of items and returns it as an async iterable, async yielding each item in sequence.
 
 ```ts
+// From a param array
 for await (let n of stream(1, 2, 3, 4)) {
   console.log(n)
 }
 
-// 1
-// 2
-// 3
-// 4
+// From a single array
+for await (let n of stream([1, 2, 3, 4])) {
+  console.log(n)
+}
+
+// From a custom iterable
+const iter =  {
+  *[Symbol.iterator]() {
+    for (let i = 1; i <= 4; i++) yield i;
+  },
+};
+for await (let n of stream(iter)) {
+  console.log(n)
+}
 ```
 
 ## `AsyncPool`
