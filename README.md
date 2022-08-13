@@ -21,6 +21,8 @@ See [SETUP.md](./docs/SETUP.md), [CONFIG.md](./docs/CONFIG.md).
 - [`promise`](#promise)
 - [`limit`](#limit)
 - [`wait`](#wait)
+- [`collect`](#collect)
+- [`stream`](#stream)
 - [`AsyncPool`](#asyncpool)
  
 ## `promise`
@@ -129,6 +131,48 @@ limit<T>(promise: Promise<T>, ctx: IContext): Promise<T>
 
 If `ms` is exactly 0, `limit` will resolve only if `promise` itself is already resolved. If `ms` is negative or `deadline` is passed, `limit` will reject even if `promise` is already resolved.
  
+## `collect`
+
+```ts
+collect<T>(stream: AsyncIterable<T>): Promise<T[]>
+```
+ 
+`collect` accepts an async iterator and returns a Promise that resolves the complete collection when iteration is complete.
+
+```ts
+// Given an async iterator
+async function* asyncSequence(n, delay): AsyncIterable<number> {
+  for(let i = 1; i <= n; n++) {
+    await new Promise(resolve => setTimeout(resolve, delay));
+    yield i;
+  }
+}
+
+// We can await the full result set:
+const result = await collect(asyncSequence(10, 50));
+console.log(result) // [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+```
+
+## `stream`
+
+```ts
+stream<T>(...items: T[]): AsyncIterable<T>
+stream<T>(items: Iterable<T>): AsyncIterable<T> 
+```
+
+The `stream` method takes a param array of items and returns it as an async iterable, async yielding each item in sequence.
+
+```ts
+for await (let n of stream(1, 2, 3, 4)) {
+  console.log(n)
+}
+
+// 1
+// 2
+// 3
+// 4
+```
+
 ## `AsyncPool`
 
 ```ts
